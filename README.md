@@ -14,9 +14,10 @@ source code.
 
 ## Needs Extended memory
 
-`tailscaled` needs a good share of the printer's memory: expected a few
-tens of MB while connected (not measured on a printer yet, see "Testing on
-a printer").
+`tailscaled` needs a good share of the printer's memory. Measured on an
+AD5X (512 MiB, Extended memory, Kiln OS v1.0.1-rc1): about 21 MB while
+connected and idle, up to 27 MB while Fluidd and the camera were open
+remotely over mobile data.
 Most AD5X printers have about 110-130 MB free while printing, and the
 printer's own programs need that room. So the plugin starts Tailscale
 only when the printer runs with **Extended memory** (printers with 512 MiB:
@@ -81,6 +82,13 @@ MagicDNS on, Tailscale's default) or `http://100.x.y.z/`. You get Fluidd
 with the camera, as at home. Slicers that upload to the printer can use
 the same address (OrcaSlicer: host `100.x.y.z`, port 80, or 7125 for
 Moonraker directly).
+
+CPU: idle, Tailscale uses next to nothing. Everything you look at remotely
+is encrypted on the printer, and the camera stream is the heavy part:
+watching it remotely used up to about 70% of one of the printer's two
+cores in testing. Tailscale runs at the lowest priority, so Klipper still
+comes first; during a long print, check in on the camera now and then
+rather than leaving it streaming.
 
 ### What your tailnet can reach
 
