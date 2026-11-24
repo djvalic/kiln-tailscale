@@ -1,0 +1,10 @@
+{
+  "name": "tailscale",
+  "description": "Fluidd and Moonraker from anywhere through your own Tailscale tailnet (needs Extended memory)",
+  "version": "0.1.0",
+  "author": "djvalic (tailscaled by Tailscale Inc)",
+  "url": "https://github.com/djvalic/kiln-tailscale",
+  "requires_os": "1.8",
+  "requires": [],
+  "conflicts": []
+}
