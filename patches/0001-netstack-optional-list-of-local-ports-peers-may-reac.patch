@@ -1,0 +1,278 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 13:25:14 -0500
+Subject: [PATCH] netstack: optional list of local ports peers may reach
+ (TS_KILN_ALLOWED_PORTS)
+
+Kiln OS patch for kiln-tailscale. In userspace networking mode, TCP and
+UDP from peers to this node's Tailscale addresses are passed on to the
+same port on 127.0.0.1, so peers reach every local port. When
+TS_KILN_ALLOWED_PORTS is set and not empty (ports separated by commas
+or spaces), only those ports are passed on: TCP to other ports gets a
+RST without dialing 127.0.0.1, UDP to other ports is dropped. Entries
+that are not ports 1-65535 are skipped, so a list without a valid port
+allows none. Unset or empty: upstream behaviour.
+
+Signed-off-by: djvalic <djvalic@users.noreply.github.com>
+---
+ wgengine/netstack/netstack.go           |  22 ++++
+ wgengine/netstack/netstack_kiln.go      |  46 ++++++++
+ wgengine/netstack/netstack_kiln_test.go | 142 ++++++++++++++++++++++++
+ 3 files changed, 210 insertions(+)
+ create mode 100644 wgengine/netstack/netstack_kiln.go
+ create mode 100644 wgengine/netstack/netstack_kiln_test.go
+
+diff --git a/wgengine/netstack/netstack.go b/wgengine/netstack/netstack.go
+index ceb2699c5..10cdbb9e8 100644
+--- a/wgengine/netstack/netstack.go
++++ b/wgengine/netstack/netstack.go
+@@ -173,6 +173,10 @@ func init() {
+ // and implements wgengine.FakeImpl to act as a userspace network
+ // stack when Tailscale is running in fake mode.
+ type Impl struct {
++	// kilnAllowedPorts (Kiln OS patch, netstack_kiln.go): nil, or the only
++	// local ports that peers may reach (TS_KILN_ALLOWED_PORTS).
++	kilnAllowedPorts map[uint16]bool
++
+ 	// GetTCPHandlerForFlow conditionally handles an incoming TCP flow for the
+ 	// provided (src/port, dst/port) 4-tuple.
+ 	//
+@@ -377,6 +381,10 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
+ 		connsInFlightByClient: make(map[netip.Addr]int),
+ 		packetsInFlight:       make(map[stack.TransportEndpointID]struct{}),
+ 		dns:                   dns,
++		kilnAllowedPorts:      parseKilnAllowedPorts(envknob.String(kilnAllowedPortsEnv)),
++	}
++	if ns.kilnAllowedPorts != nil {
++		logf("netstack: %s: only these local ports are reachable from peers: %q", kilnAllowedPortsEnv, envknob.String(kilnAllowedPortsEnv))
+ 	}
+ 	loopbackPort, ok := envknob.LookupInt("TS_DEBUG_NETSTACK_LOOPBACK_PORT")
+ 	if ok && loopbackPort >= 0 && loopbackPort <= math.MaxUint16 {
+@@ -1797,6 +1805,14 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
+ 		r.Complete(true) // sends a RST
+ 		return
+ 	case isTailscaleIP:
++		if !ns.kilnPortAllowed(reqDetails.LocalPort) {
++			// Kiln OS patch: not in TS_KILN_ALLOWED_PORTS
++			if debugNetstack() {
++				ns.logf("[v2] netstack: refusing TCP to local port %d from %v", reqDetails.LocalPort, clientRemoteIP)
++			}
++			r.Complete(true) // sends a RST
++			return
++		}
+ 		dialIP = ipv4Loopback
+ 	}
+ 	dialAddr := netip.AddrPortFrom(dialIP, uint16(reqDetails.LocalPort))
+@@ -2129,6 +2145,12 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
+ 	isLocal := ns.isLocalIP(dstAddr.Addr())
+ 	isLoopback := dstAddr.Addr() == ipv4Loopback || dstAddr.Addr() == ipv6Loopback
+ 	if isLocal {
++		if !ns.kilnPortAllowed(port) {
++			// Kiln OS patch: not in TS_KILN_ALLOWED_PORTS. Close the client
++			// endpoint, as the 4via6 guard below does.
++			client.Close()
++			return
++		}
+ 		backendRemoteAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(port)}
+ 		backendListenAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(srcPort)}
+ 	} else if isLoopback {
+diff --git a/wgengine/netstack/netstack_kiln.go b/wgengine/netstack/netstack_kiln.go
+new file mode 100644
+index 000000000..6b58cb833
+--- /dev/null
++++ b/wgengine/netstack/netstack_kiln.go
+@@ -0,0 +1,46 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++// Kiln OS patch (kiln-tailscale): an optional list of the local ports that
++// tailnet peers may reach in userspace networking mode.
++
++package netstack
++
++import (
++	"strconv"
++	"strings"
++)
++
++// kilnAllowedPortsEnv names the environment variable with the list. When it
++// is set and not empty, connections from peers to this node's Tailscale
++// addresses are passed on to 127.0.0.1 only for these ports: TCP to other
++// ports gets a RST without dialing 127.0.0.1, UDP to other ports is dropped.
++// Unset or empty: every port, as upstream.
++const kilnAllowedPortsEnv = "TS_KILN_ALLOWED_PORTS"
++
++// parseKilnAllowedPorts parses ports separated by commas and/or spaces. It
++// returns nil for an empty list (every port allowed). Entries that are not
++// ports 1-65535 are skipped, so a list without one valid entry allows no
++// port: a typo never opens every port.
++func parseKilnAllowedPorts(s string) map[uint16]bool {
++	fields := strings.FieldsFunc(s, func(r rune) bool {
++		return r == ',' || r == ' ' || r == '\t'
++	})
++	if len(fields) == 0 {
++		return nil
++	}
++	ports := make(map[uint16]bool, len(fields))
++	for _, f := range fields {
++		n, err := strconv.ParseUint(f, 10, 16)
++		if err != nil || n == 0 {
++			continue
++		}
++		ports[uint16(n)] = true
++	}
++	return ports
++}
++
++// kilnPortAllowed reports whether a peer may reach local port port.
++func (ns *Impl) kilnPortAllowed(port uint16) bool {
++	return ns.kilnAllowedPorts == nil || ns.kilnAllowedPorts[port]
++}
+diff --git a/wgengine/netstack/netstack_kiln_test.go b/wgengine/netstack/netstack_kiln_test.go
+new file mode 100644
+index 000000000..1197b64e8
+--- /dev/null
++++ b/wgengine/netstack/netstack_kiln_test.go
+@@ -0,0 +1,142 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++// Tests for the Kiln OS patch (netstack_kiln.go, TS_KILN_ALLOWED_PORTS).
++
++package netstack
++
++import (
++	"maps"
++	"net/netip"
++	"testing"
++	"time"
++
++	"gvisor.dev/gvisor/pkg/tcpip"
++	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
++	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
++	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
++	"gvisor.dev/gvisor/pkg/waiter"
++	"tailscale.com/net/packet"
++	"tailscale.com/wgengine/filter"
++)
++
++func TestParseKilnAllowedPorts(t *testing.T) {
++	cases := []struct {
++		in   string
++		want map[uint16]bool // nil: every port
++	}{
++		{"", nil},
++		{" , ", nil},
++		{"80", map[uint16]bool{80: true}},
++		{"80,7912", map[uint16]bool{80: true, 7912: true}},
++		{" 80 7125,\t7912 ", map[uint16]bool{80: true, 7125: true, 7912: true}},
++		{"80,x,0,65536,-1", map[uint16]bool{80: true}},
++		{"nope", map[uint16]bool{}}, // fail closed: no port
++		{"65535", map[uint16]bool{65535: true}},
++	}
++	for _, tc := range cases {
++		got := parseKilnAllowedPorts(tc.in)
++		if (got == nil) != (tc.want == nil) || !maps.Equal(got, tc.want) {
++			t.Errorf("parseKilnAllowedPorts(%q) = %v, want %v", tc.in, got, tc.want)
++		}
++	}
++}
++
++func TestKilnAllowedPortsFromEnv(t *testing.T) {
++	t.Setenv(kilnAllowedPortsEnv, "80, 7912")
++	impl := makeNetstack(t, nil)
++	if want := map[uint16]bool{80: true, 7912: true}; !maps.Equal(impl.kilnAllowedPorts, want) {
++		t.Errorf("kilnAllowedPorts = %v, want %v", impl.kilnAllowedPorts, want)
++	}
++}
++
++// TestKilnAllowedPortsTCP: a SYN from a peer to this node's Tailscale IP is
++// forwarded to 127.0.0.1 only for allowed ports, else answered with a RST
++// without dialing (same harness as TestAcceptTCPLoopbackForwardVsRST).
++func TestKilnAllowedPortsTCP(t *testing.T) {
++	selfIP := netip.MustParseAddr("100.64.1.2")
++	cases := []struct {
++		name        string
++		allowed     map[uint16]bool
++		port        uint16
++		wantForward bool
++	}{
++		{"NoListForwards", nil, 9999, true},
++		{"AllowedPortForwards", map[uint16]bool{80: true, 7912: true}, 7912, true},
++		{"OtherPortIsRST", map[uint16]bool{80: true, 7912: true}, 22, false},
++		{"EmptyListIsRST", map[uint16]bool{}, 80, false},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			impl := makeNetstack(t, func(impl *Impl) {
++				impl.ProcessSubnets = false
++				impl.ProcessLocalIPs = true
++				impl.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
++					return addr == selfIP
++				})
++				impl.kilnAllowedPorts = tc.allowed
++			})
++			dialFn, gotConn := makeHangDialer(t)
++			impl.forwardDialFunc = dialFn
++
++			client := netip.MustParseAddr("100.101.102.103")
++			pkt := tcp4syn(t, client, selfIP, 1234, tc.port)
++			var parsed packet.Parsed
++			parsed.Decode(pkt)
++			if resp, _ := impl.injectInbound(&parsed, impl.tundev, nil); resp != filter.DropSilently {
++				t.Fatalf("injectInbound: got %v, want filter.DropSilently", resp)
++			}
++
++			inFlightZero := make(chan struct{})
++			go func() {
++				for {
++					impl.mu.Lock()
++					n := impl.connsInFlightByClient[client]
++					impl.mu.Unlock()
++					if n == 0 {
++						close(inFlightZero)
++						return
++					}
++					time.Sleep(time.Millisecond)
++				}
++			}()
++			select {
++			case <-gotConn:
++				if !tc.wantForward {
++					t.Fatalf("port %d: dialed 127.0.0.1, want a RST", tc.port)
++				}
++			case <-inFlightZero:
++				if tc.wantForward {
++					t.Fatalf("port %d: refused, want it forwarded to 127.0.0.1", tc.port)
++				}
++			case <-time.After(5 * time.Second):
++				t.Fatalf("port %d: timed out waiting for acceptTCP", tc.port)
++			}
++		})
++	}
++}
++
++// TestKilnAllowedPortsUDP: UDP from a peer to a port not in the list is
++// dropped (the client endpoint closed) without a socket on 127.0.0.1.
++func TestKilnAllowedPortsUDP(t *testing.T) {
++	selfIP := netip.MustParseAddr("100.64.1.2")
++	impl := makeNetstack(t, func(impl *Impl) {
++		impl.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
++			return addr == selfIP
++		})
++		impl.kilnAllowedPorts = map[uint16]bool{80: true}
++	})
++	var wq waiter.Queue
++	ep, err := impl.ipstack.NewEndpoint(udp.ProtocolNumber, ipv4.ProtocolNumber, &wq)
++	if err != nil {
++		t.Fatalf("NewEndpoint: %v", err)
++	}
++	conn := gonet.NewUDPConn(&wq, ep)
++	client := netip.AddrPortFrom(netip.MustParseAddr("100.101.102.103"), 5353)
++	impl.forwardUDP(conn, client, netip.AddrPortFrom(selfIP, 9999))
++	w := tcpip.SliceWriter(make([]byte, 1))
++	_, rerr := ep.Read(&w, tcpip.ReadOptions{})
++	if _, closed := rerr.(*tcpip.ErrClosedForReceive); !closed {
++		t.Errorf("UDP to port 9999: client endpoint Read = %v, want ErrClosedForReceive (dropped)", rerr)
++	}
++}

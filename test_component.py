@@ -206,6 +206,68 @@ def test_units():
     os.unlink(f.name)
 
 
+def test_parse_ports():
+    for text, want in (("", None), ("  ", None), ("80", [80]),
+                       ("80, 7912", [80, 7912]), ("7912 80 80", [80, 7912]),
+                       ("80,,7912\t81", [80, 81, 7912]), ("65535", [65535])):
+        got, err = kt.parse_ports(text)
+        check("ports %r -> %r" % (text, want), got == want and err == "")
+    for text in ("0", "65536", "http", "80;81", "-1", "80, x", "1e3",
+                 "\u00b2", "080080"):
+        got, err = kt.parse_ports(text)
+        check("ports %r -> error" % text, got is None and err)
+
+
+async def test_ports():
+    env = Env()
+    os.environ[kt.PORTS_ENV] = "1"  # from outside: never passed on
+    try:
+        srv, c = env.component()
+        await c.component_init()
+        await wait_for(lambda: c.get_status()["state"] == "needs_login")
+        started = env.calls("started")
+        check("ports unset: no TS_KILN_ALLOWED_PORTS for tailscaled",
+              started and started[-1]["allowed_ports"] is None)
+        check("ports unset: status ports None (every port)",
+              c.get_status()["ports"] is None)
+        await c.close()
+    finally:
+        del os.environ[kt.PORTS_ENV]
+    with open(os.path.join(env.state, "fake-state"), "w") as f:
+        f.write("node key\n")
+    srv, c = env.component(ports="80, 7912 80")
+    await c.component_init()
+    await wait_for(lambda: c.get_status()["state"] == "running")
+    started = env.calls("started")
+    check("ports 80, 7912: TS_KILN_ALLOWED_PORTS=80,7912",
+          started[-1]["allowed_ports"] == "80,7912")
+    check("ports: status lists them", c.get_status()["ports"] == [80, 7912])
+    await c._remote_status()
+    check("ports: console status lists them",
+          any("Reachable ports: 80, 7912" in l for l in srv.console()))
+    await c.close()
+    # A changed list: the next Moonraker start runs tailscaled with it
+    srv, c = env.component(ports="80")
+    await c.component_init()
+    await wait_for(lambda: len(env.calls("started")) == 3)
+    check("ports changed: tailscaled started again with the new list",
+          env.calls("started")[-1]["allowed_ports"] == "80")
+    await c.close()
+    srv, c = env.component(ports="80, 7912x")
+    await c.component_init()
+    await asyncio.sleep(0.5)
+    st = c.get_status()
+    check("ports invalid: not started", st["state"] == "config_error"
+          and len(env.calls("started")) == 3)
+    check("ports invalid: warning names the entry",
+          "7912x" in srv.warnings.get("kiln_tailscale_ports", ""))
+    await srv.remote["kiln_tailscale_login"]()
+    check("ports invalid: KILN_TAILSCALE_LOGIN says why",
+          any("7912x" in l for l in srv.console()))
+    await c.close()
+    env.cleanup()
+
+
 async def test_memory_guard():
     for mem, hw in (("standard", 512), ("standard", 256), (None, 512)):
         env = Env(mem=mem, hw=hw)
@@ -505,6 +567,7 @@ def test_plugin_files():
 
 async def main_async():
     await test_memory_guard()
+    await test_ports()
     await test_override()
     await test_first_start_login_restart()
     await test_oom()
@@ -515,6 +578,7 @@ async def main_async():
 
 def main():
     test_units()
+    test_parse_ports()
     test_plugin_files()
     asyncio.run(main_async())
     test_parent_death()

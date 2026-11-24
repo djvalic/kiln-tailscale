@@ -84,32 +84,56 @@ Moonraker directly).
 
 ### What your tailnet can reach
 
-Tailscale here runs without a network interface of its own ("userspace
-networking": Kiln's kernel has no TUN). A connection that comes in over
-Tailscale to the printer's tailnet address is passed on to the same port
-on the printer itself (127.0.0.1). So devices in your tailnet reach every
-TCP port the printer listens on, also those that are normally open only
-to the printer itself: Fluidd and the API (80), Moonraker (7125), the
-cameras (8090, 8091) and the screen stream (8092), SSH (22) if it runs.
-To those programs the connection looks local, so Moonraker treats it like
-a device on your home network (Kiln OS has no login for Fluidd).
+By default, **everything** on the printer. Tailscale here runs without a
+network interface of its own ("userspace networking": Kiln's kernel has
+no TUN), so a connection that comes in over Tailscale to the printer's
+tailnet address is passed on to the same port on the printer itself
+(127.0.0.1). Devices in your tailnet reach every port the printer listens
+on, also those normally open only to the printer itself: Fluidd and the
+API (80), Mainsail if you run it (81), Moonraker (7125), the
+spool inventory of kiln-microspool (7912), the cameras (8090, 8091), the
+screen stream (8092), and other plugins' ports. That is on purpose, so
+plugins' pages work over Tailscale as at home. To those programs the
+connection looks local, so Moonraker treats it like a device on your home
+network (Kiln OS has no login for Fluidd). SSH (22) is reachable too if
+it runs on the printer; it still needs the root password.
 
-What this means:
+Anyone your tailnet lets reach the printer can control it, as anyone on
+your home network can. Don't share the printer with other people's
+tailnets unless you would hand them the printer.
 
-- Anyone your tailnet lets reach the printer can control it, as anyone on
-  your home network can. Don't share the printer with other people's
-  tailnets unless you would hand them the printer.
-- To allow only Fluidd, limit the printer to port 80 in your tailnet's
-  access rules (admin console, Access controls), for example with a tag:
+To limit what is reachable, list the ports in your `moonraker.conf`:
 
-  ```
-  "grants": [
-    {"src": ["autogroup:member"], "dst": ["tag:printer"], "ip": ["tcp:80"]}
-  ]
-  ```
+```
+[kiln_tailscale]
+ports: 80, 7912
+```
 
-  (give the printer the tag `tag:printer` in the admin console). With the
-  default rules, every device of yours reaches every port.
+Only those ports are passed on; a connection to another port is refused
+(TCP) or dropped (UDP) by Tailscale itself, before anything on the
+printer sees it. Fluidd needs only 80 (its camera and Moonraker go
+through 80); add 7125 for a slicer that talks to Moonraker directly.
+Ports are separated by commas or spaces, 1 to 65535. A list with anything
+else in it is not guessed at: Tailscale doesn't start and Fluidd says
+which entry is wrong. A changed list applies when Moonraker restarts
+(Fluidd's restart button for Moonraker, or a reboot), which restarts
+Tailscale with it. `KILN_TAILSCALE_STATUS` and
+`/server/kiln_tailscale/status` (`ports`, `null` for every port) show the
+list in use. This is a small patch of ours to Tailscale
+(`patches/0001-...patch`, `patches/README.md`).
+
+The other way, or both: your tailnet's access rules in Tailscale's admin
+console (Access controls) decide which of your devices may reach which
+ports, for example with a tag:
+
+```
+"grants": [
+  {"src": ["autogroup:member"], "dst": ["tag:printer"], "ip": ["tcp:80", "tcp:7912"]}
+]
+```
+
+(give the printer the tag `tag:printer` in the admin console). With the
+default rules, every device of yours reaches every port.
 
 ## Privacy and what is left out
 
@@ -154,6 +178,7 @@ plugin's section is empty, so yours count):
 |---|---|---|
 | `allow_low_memory` | `False` | `True` runs Tailscale without Extended memory ("Needs Extended memory" above) |
 | `hostname` | `kiln-<printer name>` | The printer's name in your tailnet |
+| `ports` | every port | Only these local ports reachable from the tailnet, `80, 7912` ("What your tailnet can reach") |
 | `login_server` | Tailscale's | Another coordination server, such as your own Headscale (`https://headscale.example.com`) |
 | `memory_limit` | `48MiB` | tailscaled's memory target (Go's `GOMEMLIMIT`; a soft limit) |
 | `state_dir` | `/home/klipper/printer_data/tailscale` | The printer's Tailscale identity (keys) |
@@ -192,7 +217,8 @@ one is needed and watches for changes.
 `tools/build_tailscale.sh`: Tailscale's release tag (checked against its
 commit), the Go version its `go.mod` names (downloaded from go.dev, its
 sha256 checked against the pinned one and the one go.dev publishes),
-built for the printer's processor (MIPS32 little-endian, software
+with Kiln's patches in `patches/` (one: the `ports` option) and their
+tests, built for the printer's processor (MIPS32 little-endian, software
 floating point) with the features above left out, and Tailscale's own
 version stamp. The printer's kernel only runs MIPS programs marked
 "NaN2008", so the script sets that flag in the file header afterwards
@@ -219,6 +245,7 @@ With Extended memory on and the plugin enabled:
 
 - tailscaled (`bin/tailscaled`): BSD-3-Clause, Tailscale Inc and
   contributors (`LICENSE-tailscale`); its source is
-  https://github.com/tailscale/tailscale at the tag in `bin/SOURCES`.
+  https://github.com/tailscale/tailscale at the tag in `bin/SOURCES`,
+  with the patches in `patches/` (BSD-3-Clause, like Tailscale).
 - This plugin (the Moonraker component, `plugin.cfg`, the build script,
   the tests): GPLv3 (`LICENSE`), like Moonraker.

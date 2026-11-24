@@ -19,6 +19,9 @@
 # [kiln_tailscale] options (all optional):
 #   allow_low_memory  False; True runs Tailscale without Extended memory
 #   hostname          the name in your tailnet (default kiln-<printer name>)
+#   ports             only these local ports reachable from the tailnet
+#                     ("80, 7912"); empty: every port. Needs the patched
+#                     tailscaled (patches/0001, TS_KILN_ALLOWED_PORTS)
 #   login_server      another control server (Headscale); default Tailscale
 #   memory_limit      GOMEMLIMIT for tailscaled (default 48MiB)
 #   state_dir         default <printer_data>/tailscale (the node's keys)
@@ -83,7 +86,25 @@ LOW_MEMORY_WARNING = (
     "kiln-tailscale: Tailscale on a printer without Extended memory: may "
     "cause slowdowns or memory errors during prints.")
 
+PORTS_ENV = "TS_KILN_ALLOWED_PORTS"
+
 LOGIN_URL_RE = re.compile(r"https?://[^\s\"']+/a/[0-9A-Za-z]+")
+
+
+def parse_ports(text: str) -> Tuple[Optional[List[int]], str]:
+    """The ports option: (None, "") for every port, (sorted ports, "") or
+    (None, error). Ports separated by commas and/or spaces, 1-65535."""
+    words = [w for w in re.split(r"[\s,]+", text.strip()) if w]
+    if not words:
+        return None, ""
+    ports = set()
+    for w in words:
+        if not re.fullmatch(r"[0-9]{1,5}", w) or not 1 <= int(w) <= 65535:
+            return None, ("ports: '%s' is not a port (1-65535); write the "
+                          "ports separated by commas, like ports: 80, 7912"
+                          % w)
+        ports.add(int(w))
+    return sorted(ports), ""
 
 
 def read_memory_conf(path: str) -> Dict[str, str]:
@@ -291,6 +312,7 @@ class KilnTailscale:
             or DEFAULT_DATA_PATH
         self.allow_low = config.getboolean("allow_low_memory", False)
         self.hostname = config.get("hostname", "") or default_hostname()
+        self.ports, self.ports_error = parse_ports(config.get("ports", ""))
         self.login_server = config.get("login_server", "").strip()
         self.memory_limit = config.get("memory_limit", "48MiB").strip()
         self.state_dir = config.get(
@@ -371,6 +393,13 @@ class KilnTailscale:
 
     # Why tailscaled isn't started now, or ""
     def _blocked(self) -> str:
+        if self.ports_error:
+            # Neither every port nor none: don't guess, don't start
+            self.server.add_warning(
+                "kiln-tailscale: Tailscale is not started: [kiln_tailscale] "
+                "%s. Fix it in your moonraker.conf and restart Moonraker."
+                % self.ports_error, warn_id="kiln_tailscale_ports")
+            return "config_error"
         self.guard = memory_guard(read_memory_conf(self.memory_conf),
                                   self.allow_low)
         if not self.guard["ok"]:
@@ -426,6 +455,10 @@ class KilnTailscale:
             env["GOMEMLIMIT"] = self.memory_limit
         # logpolicy's directory (else ~/.local/share/tailscale)
         env["TS_LOGS_DIR"] = self.state_dir
+        # Reachable local ports (patches/0001); unset: every port
+        env.pop(PORTS_ENV, None)
+        if self.ports:
+            env[PORTS_ENV] = ",".join(str(p) for p in self.ports)
         return env
 
     async def _sleep(self, delay: float) -> None:
@@ -683,7 +716,9 @@ class KilnTailscale:
     def _state(self) -> str:
         blocked = ""
         if not self._alive():
-            if not self.guard.get("ok", True):
+            if self.ports_error:
+                blocked = "config_error"
+            elif not self.guard.get("ok", True):
                 blocked = "memory_guard"
             elif self._has_marker(OOM_MARKER):
                 blocked = "oom_off"
@@ -722,6 +757,8 @@ class KilnTailscale:
             "version": st.get("Version"),
             "health": st.get("Health") or [],
             "memory_guard": dict(self.guard),
+            # None: every local port is reachable from the tailnet
+            "ports": list(self.ports) if self.ports else None,
             "daemon": {
                 "running": running,
                 "pid": self.proc.pid if running and self.proc else None,
@@ -756,6 +793,8 @@ class KilnTailscale:
         elif state == "needs_approval":
             text = ("logged in; approve the device in your Tailscale "
                     "admin console")
+        elif state == "config_error":
+            text = "not started: " + self.ports_error
         elif state == "memory_guard":
             text = "not started: " + s["memory_guard"].get("reason", "")
         elif state == "oom_off":
@@ -765,6 +804,10 @@ class KilnTailscale:
             text = "logged out; KILN_TAILSCALE_LOGIN logs in again"
         else:
             text = state
+        if state == "running":
+            text += (". Reachable ports: " +
+                     ", ".join(str(p) for p in s["ports"])
+                     if s["ports"] else ". Every port is reachable")
         if s["memory_guard"].get("override"):
             text += " (without Extended memory: allow_low_memory)"
         if s["error"] and state not in ("running",):
@@ -815,6 +858,9 @@ class KilnTailscale:
         self._console(self._summary())
 
     async def _remote_login(self) -> None:
+        if self.ports_error:
+            self._console("not started: " + self.ports_error)
+            return
         if not self.guard.get("ok", True):
             self._console("not started: " + guard_message(self.guard))
             return

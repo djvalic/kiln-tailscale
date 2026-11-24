@@ -1,6 +1,7 @@
 bin/tailscaled: Tailscale 1.104.7-tcbc74fe48 (tailscaled only, no CLI), built from source by tools/build_tailscale.sh
 licence: BSD-3-Clause, Tailscale Inc & contributors (LICENSE-tailscale)
-source: https://github.com/tailscale/tailscale.git tag v1.104.7, commit cbc74fe48ef1b1649f69a4d9a602319427e25102
+source: https://github.com/tailscale/tailscale.git tag v1.104.7, commit cbc74fe48ef1b1649f69a4d9a602319427e25102, with the patches below
+patch: patches/0001-netstack-optional-list-of-local-ports-peers-may-reac.patch sha256 686de88464a545720fa42a4507133064f3d65f8777d2b91a9ff03336049290b6
 go: go1.27.4 linux-amd64 from https://go.dev/dl/go1.27.4.linux-amd64.tar.gz, sha256 7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 target: CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat
 flags: -trimpath -ldflags "-s -w -X tailscale.com/version.longStamp=1.104.7-tcbc74fe48 -X tailscale.com/version.shortStamp=1.104.7"
@@ -8,4 +9,4 @@ features kept: netstack,nattraversal,ipnbus,unixsocketidentity,bakedroots,health
 tags: ts_omit_ace,ts_omit_acme,ts_omit_advertiseexitnode,ts_omit_advertiseroutes,ts_omit_androidbin,ts_omit_androiddns,ts_omit_appconnectors,ts_omit_aws,ts_omit_bird,ts_omit_c2n,ts_omit_cachenetmap,ts_omit_captiveportal,ts_omit_capture,ts_omit_cliconndiag,ts_omit_clientmetrics,ts_omit_clientupdate,ts_omit_cloud,ts_omit_colorable,ts_omit_completion,ts_omit_completion_scripts,ts_omit_conn25,ts_omit_connreject,ts_omit_dbus,ts_omit_debug,ts_omit_debugeventbus,ts_omit_debugportmapper,ts_omit_desktop_sessions,ts_omit_dns,ts_omit_dnsresolvecache,ts_omit_doctor,ts_omit_drive,ts_omit_favorites,ts_omit_flashappliance,ts_omit_gro,ts_omit_hujsonconf,ts_omit_identityfederation,ts_omit_iptables,ts_omit_kube,ts_omit_linkspeed,ts_omit_linuxdnsfight,ts_omit_listenrawdisco,ts_omit_logtail,ts_omit_netlog,ts_omit_networkmanager,ts_omit_oauthkey,ts_omit_osrouter,ts_omit_outboundproxy,ts_omit_peerapiclient,ts_omit_peerapiserver,ts_omit_portlist,ts_omit_portmapper,ts_omit_posture,ts_omit_qrcodes,ts_omit_relayserver,ts_omit_remoteconfig,ts_omit_resolved,ts_omit_routecheck,ts_omit_runtimemetrics,ts_omit_sdnotify,ts_omit_serve,ts_omit_serviceclientprefs,ts_omit_ssh,ts_omit_synology,ts_omit_syslog,ts_omit_syspolicy,ts_omit_systray,ts_omit_taildrop,ts_omit_tailnetlock,ts_omit_tap,ts_omit_tpm,ts_omit_tundevstats,ts_omit_useexitnode,ts_omit_useproxy,ts_omit_usermetrics,ts_omit_useroutes,ts_omit_wakeonlan,ts_omit_webbrowser,ts_omit_webclient
 elf: EF_MIPS_NAN2008 (0x400) set in e_flags after the build
 size: 17170623 bytes
-sha256: b065f8c9cf50f2766435329c5f511c96398fc3c1b3988d7828e4e3fdcfcbadab
+sha256: 2d554ff5ac298278bcc38dda877e54497326da319240e7fb77f1144926589290

@@ -247,7 +247,8 @@ def main():
         oom = int(f.read())
     record("started", argv=sys.argv[1:], nice=os.nice(0), oom_score_adj=oom,
            gomemlimit=os.environ.get("GOMEMLIMIT"),
-           ts_logs_dir=os.environ.get("TS_LOGS_DIR"), mode=mode,
+           ts_logs_dir=os.environ.get("TS_LOGS_DIR"),
+           allowed_ports=os.environ.get("TS_KILN_ALLOWED_PORTS"), mode=mode,
            pid=os.getpid())
     print("fake tailscaled starting, mode " + mode, flush=True)
     if mode == "exit1":

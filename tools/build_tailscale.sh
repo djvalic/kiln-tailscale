@@ -9,6 +9,8 @@
 #   publishes in https://go.dev/dl/?mode=json&include=all);
 # - clones https://github.com/tailscale/tailscale at the pinned tag and
 #   checks that the tag points at the pinned commit;
+# - applies Kiln's patches (patches/*.patch, in order; see patches/README.md)
+#   and runs their Go tests on this computer;
 # - builds ./cmd/tailscaled for the printer (MIPS32 little-endian, soft
 #   float, no cgo) with Tailscale's own version stamp (as build_dist.sh
 #   sets it) and with the features this plugin doesn't use left out;
@@ -109,8 +111,18 @@ if [ "$WANT_GO" != "$GO_VERSION" ]; then
 	exit 1
 fi
 
-# Tags and version stamp (both with the host's GOOS/GOARCH)
+# Kiln OS patches, in order, then their tests (on this computer)
 cd "$SRC"
+PATCH_LINES=""
+for p in "$REPO_DIR"/patches/*.patch; do
+	[ -f "$p" ] || continue
+	git apply "$p"
+	PATCH_LINES="$PATCH_LINES
+patch: patches/$(basename "$p") sha256 $(sha256sum "$p" | cut -d' ' -f1)"
+done
+GOOS= GOARCH= CGO_ENABLED=0 "$GO" test -count=1 -run Kiln ./wgengine/netstack/
+
+# Tags and version stamp (both with the host's GOOS/GOARCH)
 TAGS=$(GOOS= GOARCH= CGO_ENABLED=0 "$GO" run ./cmd/featuretags --min --add="$TS_KEEP")
 eval "$(CGO_ENABLED=0 GOOS= GOARCH= "$GO" run ./cmd/mkversion)"
 LDFLAGS="-s -w -X tailscale.com/version.longStamp=$VERSION_LONG -X tailscale.com/version.shortStamp=$VERSION_SHORT"
@@ -147,7 +159,8 @@ SIZE=$(wc -c < bin/tailscaled)
 {
 	echo "bin/tailscaled: Tailscale $VERSION_LONG (tailscaled only, no CLI), built from source by tools/build_tailscale.sh"
 	echo "licence: BSD-3-Clause, Tailscale Inc & contributors (LICENSE-tailscale)"
-	echo "source: $TS_REPO tag $TS_TAG, commit $TS_COMMIT"
+	echo "source: $TS_REPO tag $TS_TAG, commit $TS_COMMIT, with the patches below"
+	[ -z "$PATCH_LINES" ] || echo "${PATCH_LINES#?}"
 	echo "go: go$GO_VERSION linux-amd64 from https://go.dev/dl/$GO_TGZ, sha256 $GO_SHA256"
 	echo "target: CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat"
 	echo "flags: -trimpath -ldflags \"$LDFLAGS\""
