@@ -27,7 +27,7 @@ didn't start.
 You can run it without Extended memory anyway, at your own risk:
 
 ```
-[kiln_tailscale]
+[tailscale]
 allow_low_memory: True
 ```
 
@@ -37,7 +37,7 @@ system may have to stop programs to free memory. tailscaled is always the
 first one it stops (it is set up that way), but a print can still stutter
 or, in a bad case, fail. If the system ever has to stop tailscaled for
 lack of memory, the plugin switches Tailscale off, also after restarts,
-and Fluidd says so; `KILN_TAILSCALE_LOGIN` starts it again.
+and Fluidd says so; `TAILSCALE_LOGIN` starts it again.
 
 ## Install
 
@@ -60,15 +60,15 @@ the printer asks to be added to your tailnet:
 
 1. Fluidd shows a notification with a login link
    (`https://login.tailscale.com/a/...`), and the console prints it too.
-   `KILN_TAILSCALE_STATUS` in the console shows it again.
+   `TAILSCALE_STATUS` in the console shows it again.
 2. Open the link and log in with your Tailscale account. That adds the
    printer to your tailnet, as `kiln-<printer name>`.
-3. `KILN_TAILSCALE_STATUS` now says "connected as ...", with the
+3. `TAILSCALE_STATUS` now says "connected as ...", with the
    printer's tailnet address (100.x.y.z) and name.
 
 Keep the link to yourself: whoever opens it first adds the printer to
 *their* tailnet. It is shown only in Fluidd (on your own network) and is
-left out of the logs. A link that has expired: `KILN_TAILSCALE_LOGIN`
+left out of the logs. A link that has expired: `TAILSCALE_LOGIN`
 makes a new one.
 
 If your tailnet requires device approval, approve the printer in the
@@ -105,7 +105,7 @@ tailnets unless you would hand them the printer.
 To limit what is reachable, list the ports in your `moonraker.conf`:
 
 ```
-[kiln_tailscale]
+[tailscale]
 ports: 80, 7912
 ```
 
@@ -117,8 +117,8 @@ Ports are separated by commas or spaces, 1 to 65535. A list with anything
 else in it is not guessed at: Tailscale doesn't start and Fluidd says
 which entry is wrong. A changed list applies when Moonraker restarts
 (Fluidd's restart button for Moonraker, or a reboot), which restarts
-Tailscale with it. `KILN_TAILSCALE_STATUS` and
-`/server/kiln_tailscale/status` (`ports`, `null` for every port) show the
+Tailscale with it. `TAILSCALE_STATUS` and
+`/server/tailscale/status` (`ports`, `null` for every port) show the
 list in use. This is a small patch of ours to Tailscale
 (`patches/0001-...patch`, `patches/README.md`).
 
@@ -160,18 +160,18 @@ From Fluidd's console, HelixScreen's macros or any macro:
 
 | Command | |
 |---|---|
-| `KILN_TAILSCALE_STATUS` | Connected or not, the tailnet name and address, the login link |
-| `KILN_TAILSCALE_LOGIN` | A new login link; also starts Tailscale again after a logout or the out-of-memory switch-off |
-| `KILN_TAILSCALE_LOGOUT` | Logs the printer out of the tailnet and stops Tailscale |
+| `TAILSCALE_STATUS` | Connected or not, the tailnet name and address, the login link |
+| `TAILSCALE_LOGIN` | A new login link; also starts Tailscale again after a logout or the out-of-memory switch-off |
+| `TAILSCALE_LOGOUT` | Logs the printer out of the tailnet and stops Tailscale |
 
-Moonraker API: `GET /server/kiln_tailscale/status` (state, login link,
+Moonraker API: `GET /server/tailscale/status` (state, login link,
 tailnet address and name, the memory guard, tailscaled's last lines),
-`POST /server/kiln_tailscale/login`, `POST /server/kiln_tailscale/logout`.
-Websocket clients get `notify_kiln_tailscale_status_changed`.
+`POST /server/tailscale/login`, `POST /server/tailscale/logout`.
+Websocket clients get `notify_tailscale_status_changed`.
 
 ## Settings
 
-In your `moonraker.conf`, a `[kiln_tailscale]` section of your own (the
+In your `moonraker.conf`, a `[tailscale]` section of your own (the
 plugin's section is empty, so yours count):
 
 | Option | Default | |
@@ -187,8 +187,8 @@ plugin's section is empty, so yours count):
 
 ## Removing it from your tailnet
 
-1. `KILN_TAILSCALE_LOGOUT` in the console: the printer logs out and
-   Tailscale stops (it stays off until `KILN_TAILSCALE_LOGIN`).
+1. `TAILSCALE_LOGOUT` in the console: the printer logs out and
+   Tailscale stops (it stays off until `TAILSCALE_LOGIN`).
 2. In Tailscale's admin console (Machines), remove the printer if it is
    still listed.
 3. Switch the plugin off (`DISABLE_PLUGIN NAME=tailscale`, or Settings >
@@ -199,7 +199,7 @@ plugin's section is empty, so yours count):
 
 ## How it runs
 
-The plugin's Moonraker component (`moonraker/components/kiln_tailscale.py`)
+The plugin's Moonraker component (`moonraker/components/tailscale.py`)
 starts `bin/tailscaled` as user `klipper` (no root part) with
 `--tun=userspace-networking`, its state in `printer_data/tailscale`
 (readable only by `klipper`, not reachable from Fluidd's file manager) and
@@ -233,13 +233,13 @@ the printer.
 
 With Extended memory on and the plugin enabled:
 
-1. `KILN_TAILSCALE_STATUS`: waiting for login, with the link; open it.
-2. `KILN_TAILSCALE_STATUS`: connected; open `http://<tailnet name>/` from a
+1. `TAILSCALE_STATUS`: waiting for login, with the link; open it.
+2. `TAILSCALE_STATUS`: connected; open `http://<tailnet name>/` from a
    phone with mobile data (not your Wi-Fi): Fluidd, camera, a file upload.
 3. Memory and CPU: `grep -E 'VmRSS|VmHWM' /proc/$(pidof tailscaled)/status`
    and `top -b -n 1 | grep tailscaled`, idle and while Fluidd shows the
    camera over Tailscale.
-4. `KILN_TAILSCALE_LOGOUT`, then remove it in the admin console.
+4. `TAILSCALE_LOGOUT`, then remove it in the admin console.
 
 ## Licence and credits
 

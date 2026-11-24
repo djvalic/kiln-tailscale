@@ -14,9 +14,9 @@
 # Memory guard: tailscaled is started only when the printer runs in Extended
 # memory (/run/ad5x-memory.conf MEM_MODE=extended, 512 MiB printers), unless
 # allow_low_memory: True. If the OOM killer stops tailscaled, Tailscale stays
-# off (also after restarts) until KILN_TAILSCALE_LOGIN.
+# off (also after restarts) until TAILSCALE_LOGIN.
 #
-# [kiln_tailscale] options (all optional):
+# [tailscale] options (all optional):
 #   allow_low_memory  False; True runs Tailscale without Extended memory
 #   hostname          the name in your tailnet (default kiln-<printer name>)
 #   ports             only these local ports reachable from the tailnet
@@ -29,12 +29,12 @@
 #   binary            the tailscaled program (default the plugin's bin/)
 #   memory_conf       /run/ad5x-memory.conf
 #
-# Endpoints:  GET /server/kiln_tailscale/status
-#             POST /server/kiln_tailscale/login   (again after logout or OOM)
-#             POST /server/kiln_tailscale/logout
-# Remote methods (the plugin.cfg macros): kiln_tailscale_status,
-#   kiln_tailscale_login, kiln_tailscale_logout
-# Notification: notify_kiln_tailscale_status_changed (the status)
+# Endpoints:  GET /server/tailscale/status
+#             POST /server/tailscale/login   (again after logout or OOM)
+#             POST /server/tailscale/logout
+# Remote methods (the plugin.cfg macros): tailscale_status,
+#   tailscale_login, tailscale_logout
+# Notification: notify_tailscale_status_changed (the status)
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
@@ -156,7 +156,7 @@ def guard_message(guard: Dict[str, Any]) -> str:
     return ("kiln-tailscale: Tailscale is not started: it needs Extended "
             "memory (%s). %sTo run it anyway, at the risk of slowdowns or "
             "memory errors during prints, set allow_low_memory: True in a "
-            "[kiln_tailscale] section of your moonraker.conf." % (
+            "[tailscale] section of your moonraker.conf." % (
                 guard.get("reason", ""), how))
 
 
@@ -346,21 +346,21 @@ class KilnTailscale:
         self.log_window = (0., 0, 0)  # (minute start, logged, skipped)
         self.last_sent: Optional[Dict[str, Any]] = None
         self.server.register_endpoint(
-            "/server/kiln_tailscale/status", ["GET"], self._handle_status)
+            "/server/tailscale/status", ["GET"], self._handle_status)
         self.server.register_endpoint(
-            "/server/kiln_tailscale/login", ["POST"], self._handle_login)
+            "/server/tailscale/login", ["POST"], self._handle_login)
         self.server.register_endpoint(
-            "/server/kiln_tailscale/logout", ["POST"], self._handle_logout)
+            "/server/tailscale/logout", ["POST"], self._handle_logout)
         self.server.register_remote_method(
-            "kiln_tailscale_status", self._remote_status)
+            "tailscale_status", self._remote_status)
         self.server.register_remote_method(
-            "kiln_tailscale_login", self._remote_login)
+            "tailscale_login", self._remote_login)
         self.server.register_remote_method(
-            "kiln_tailscale_logout", self._remote_logout)
-        # notify_kiln_tailscale_status_changed (without the name Moonraker
+            "tailscale_logout", self._remote_logout)
+        # notify_tailscale_status_changed (without the name Moonraker
         # would use the part after ":", notify_status_changed)
         self.server.register_notification(
-            "kiln_tailscale:status_changed", "kiln_tailscale_status_changed")
+            "tailscale:status_changed", "tailscale_status_changed")
 
     # Markers in the state directory (kept across Moonraker restarts)
     def _marker(self, name: str) -> str:
@@ -375,7 +375,7 @@ class KilnTailscale:
             with open(self._marker(name), "w") as f:
                 f.write(text + "\n")
         except OSError as e:
-            logging.info("kiln_tailscale: marker %s: %s", name, e)
+            logging.info("tailscale: marker %s: %s", name, e)
 
     def _clear_marker(self, name: str) -> None:
         try:
@@ -396,30 +396,30 @@ class KilnTailscale:
         if self.ports_error:
             # Neither every port nor none: don't guess, don't start
             self.server.add_warning(
-                "kiln-tailscale: Tailscale is not started: [kiln_tailscale] "
+                "kiln-tailscale: Tailscale is not started: [tailscale] "
                 "%s. Fix it in your moonraker.conf and restart Moonraker."
-                % self.ports_error, warn_id="kiln_tailscale_ports")
+                % self.ports_error, warn_id="tailscale_ports")
             return "config_error"
         self.guard = memory_guard(read_memory_conf(self.memory_conf),
                                   self.allow_low)
         if not self.guard["ok"]:
             self.server.add_warning(guard_message(self.guard),
-                                    warn_id="kiln_tailscale_memory")
+                                    warn_id="tailscale_memory")
             return "memory_guard"
-        self.server.remove_warning("kiln_tailscale_memory")
+        self.server.remove_warning("tailscale_memory")
         if self.guard["override"]:
             self.server.add_warning(LOW_MEMORY_WARNING,
-                                    warn_id="kiln_tailscale_low_memory")
+                                    warn_id="tailscale_low_memory")
         else:
-            self.server.remove_warning("kiln_tailscale_low_memory")
+            self.server.remove_warning("tailscale_low_memory")
         if self._has_marker(OOM_MARKER):
             self.server.add_warning(
                 "kiln-tailscale: tailscaled ran out of memory and was "
                 "stopped by the system, so Tailscale is switched off to "
-                "keep prints safe. KILN_TAILSCALE_LOGIN in the console "
-                "starts it again.", warn_id="kiln_tailscale_oom")
+                "keep prints safe. TAILSCALE_LOGIN in the console "
+                "starts it again.", warn_id="tailscale_oom")
             return "oom_off"
-        self.server.remove_warning("kiln_tailscale_oom")
+        self.server.remove_warning("tailscale_oom")
         if self._has_marker(LOGOUT_MARKER):
             return "logged_out"
         return ""
@@ -479,33 +479,33 @@ class KilnTailscale:
                     await self._sleep(3600.)
                     continue
                 if not self._prepare():
-                    logging.info("kiln_tailscale: %s; retry in %d s",
+                    logging.info("tailscale: %s; retry in %d s",
                                  self.last_error, int(backoff))
                     self.server.add_warning(
                         "kiln-tailscale: " + self.last_error,
-                        warn_id="kiln_tailscale_error")
+                        warn_id="tailscale_error")
                     self._publish()
                     await self._sleep(backoff)
                     backoff = min(backoff * 2, BACKOFF_MAX)
                     continue
-                self.server.remove_warning("kiln_tailscale_error")
+                self.server.remove_warning("tailscale_error")
                 await self._run_once()
                 if self.closing:
                     break
                 if self.oom_killed:
                     self._set_marker(OOM_MARKER, time.strftime(
                         "%Y-%m-%d %H:%M:%S"))
-                    logging.info("kiln_tailscale: tailscaled was OOM-killed;"
+                    logging.info("tailscale: tailscaled was OOM-killed;"
                                  " Tailscale switched off")
                     self._console("tailscaled ran out of memory; Tailscale "
-                                  "is off until KILN_TAILSCALE_LOGIN")
+                                  "is off until TAILSCALE_LOGIN")
                     continue
                 if self._has_marker(LOGOUT_MARKER):
                     continue
                 if time.monotonic() - self.started_at > STABLE_AFTER:
                     backoff = BACKOFF_MIN
                 self.restarts += 1
-                logging.info("kiln_tailscale: tailscaled stopped (exit %s); "
+                logging.info("tailscale: tailscaled stopped (exit %s); "
                              "restart in %d s", self.last_exit, int(backoff))
                 self._publish()
                 await self._sleep(backoff)
@@ -528,12 +528,12 @@ class KilnTailscale:
                 env=self._env(), preexec_fn=self._child_setup)
         except Exception as e:
             self.last_error = "start failed: %s" % e
-            logging.info("kiln_tailscale: %s", self.last_error)
+            logging.info("tailscale: %s", self.last_error)
             self.last_exit = None
             return
         self.started_at = time.monotonic()
         self.last_error = ""
-        logging.info("kiln_tailscale: tailscaled started (pid %d): %s",
+        logging.info("tailscale: tailscaled started (pid %d): %s",
                      self.proc.pid, " ".join(shlex.quote(c) for c in cmd))
         self._publish()
         self.control_task = asyncio.create_task(self._control())
@@ -563,7 +563,7 @@ class KilnTailscale:
         start, logged, skipped = self.log_window
         if now - start >= 60.:
             if skipped:
-                logging.info("kiln_tailscale: (%d tailscaled lines not "
+                logging.info("tailscale: (%d tailscaled lines not "
                              "logged)", skipped)
             start, logged, skipped = now, 0, 0
         if logged < LOG_PER_MINUTE:
@@ -613,7 +613,7 @@ class KilnTailscale:
         try:
             if not await self._wait_socket():
                 self.last_error = "tailscaled's LocalAPI did not answer"
-                logging.info("kiln_tailscale: %s", self.last_error)
+                logging.info("tailscale: %s", self.last_error)
                 self._publish()
                 return
             await self._refresh()
@@ -623,13 +623,13 @@ class KilnTailscale:
                     async for msg in self.api.watch(WATCH_MASK):
                         await self._on_notify(msg)
                 except (OSError, LocalAPIError, asyncio.TimeoutError) as e:
-                    logging.info("kiln_tailscale: watch-ipn-bus: %s", e)
+                    logging.info("tailscale: watch-ipn-bus: %s", e)
                 await asyncio.sleep(5.)
                 await self._refresh()
         except asyncio.CancelledError:
             pass
         except Exception:
-            logging.exception("kiln_tailscale: LocalAPI")
+            logging.exception("tailscale: LocalAPI")
 
     async def _bring_up(self) -> None:
         st = self.ts_status
@@ -645,7 +645,7 @@ class KilnTailscale:
                 await self.api.request("PATCH", "prefs", prefs)
         except (OSError, LocalAPIError, asyncio.TimeoutError) as e:
             self.last_error = "settings: %s" % e
-            logging.info("kiln_tailscale: %s", self.last_error)
+            logging.info("tailscale: %s", self.last_error)
         await self._refresh()
         await self._maybe_login()
 
@@ -662,7 +662,7 @@ class KilnTailscale:
             await self.api.request("POST", "login-interactive")
         except (OSError, LocalAPIError, asyncio.TimeoutError) as e:
             self.last_error = "login: %s" % e
-            logging.info("kiln_tailscale: %s", self.last_error)
+            logging.info("tailscale: %s", self.last_error)
 
     async def _on_notify(self, msg: Dict[str, Any]) -> None:
         url = msg.get("BrowseToURL")
@@ -681,7 +681,7 @@ class KilnTailscale:
         try:
             st = await self.api.request("GET", "status?peers=false")
         except (OSError, LocalAPIError, asyncio.TimeoutError) as e:
-            logging.info("kiln_tailscale: status: %s", e)
+            logging.info("tailscale: status: %s", e)
             return
         if not isinstance(st, dict):
             return
@@ -702,12 +702,12 @@ class KilnTailscale:
                 "kiln-tailscale: to add this printer to your tailnet, open "
                 "%s and log in to Tailscale. The link is shown only to you "
                 "(on this printer's network); don't share it." % url,
-                warn_id="kiln_tailscale_login", log=False)
+                warn_id="tailscale_login", log=False)
             self._console("to add this printer to your tailnet, open: " + url)
-            logging.info("kiln_tailscale: login link waiting (see Fluidd's "
-                         "notifications or /server/kiln_tailscale/status)")
+            logging.info("tailscale: login link waiting (see Fluidd's "
+                         "notifications or /server/tailscale/status)")
         else:
-            self.server.remove_warning("kiln_tailscale_login")
+            self.server.remove_warning("tailscale_login")
 
     # Status
     def _alive(self) -> bool:
@@ -778,7 +778,7 @@ class KilnTailscale:
         if key == self.last_sent:
             return
         self.last_sent = key
-        self.server.send_event("kiln_tailscale:status_changed", status)
+        self.server.send_event("tailscale:status_changed", status)
 
     def _summary(self) -> str:
         s = self.get_status()
@@ -798,10 +798,10 @@ class KilnTailscale:
         elif state == "memory_guard":
             text = "not started: " + s["memory_guard"].get("reason", "")
         elif state == "oom_off":
-            text = ("off after running out of memory; KILN_TAILSCALE_LOGIN "
+            text = ("off after running out of memory; TAILSCALE_LOGIN "
                     "starts it again")
         elif state == "logged_out":
-            text = "logged out; KILN_TAILSCALE_LOGIN logs in again"
+            text = "logged out; TAILSCALE_LOGIN logs in again"
         else:
             text = state
         if state == "running":
@@ -821,7 +821,7 @@ class KilnTailscale:
     async def login(self) -> Dict[str, Any]:
         self._clear_marker(OOM_MARKER)
         self._clear_marker(LOGOUT_MARKER)
-        self.server.remove_warning("kiln_tailscale_oom")
+        self.server.remove_warning("tailscale_oom")
         if self._alive():
             await self._refresh()
             if self.ts_status.get("BackendState") == "NeedsLogin":
@@ -873,7 +873,7 @@ class KilnTailscale:
         await self.logout()
         self._console("logged out and stopped. To remove the printer from "
                       "your tailnet, delete it in the Tailscale admin console"
-                      " (Machines). KILN_TAILSCALE_LOGIN logs in again.")
+                      " (Machines). TAILSCALE_LOGIN logs in again.")
 
     async def _stop_proc(self) -> None:
         proc = self.proc
@@ -883,7 +883,7 @@ class KilnTailscale:
         try:
             await asyncio.wait_for(proc.wait(), STOP_WAIT)
         except asyncio.TimeoutError:
-            logging.info("kiln_tailscale: no exit after SIGTERM, killing")
+            logging.info("tailscale: no exit after SIGTERM, killing")
             proc.kill()
             await proc.wait()
 

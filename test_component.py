@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests for the Kiln OS Moonraker component
-(moonraker/components/kiln_tailscale.py) with a stand-in for Moonraker and
+(moonraker/components/tailscale.py) with a stand-in for Moonraker and
 a fake tailscaled (tests/fake_tailscaled.py: tailscaled's flags and the
 LocalAPI over its unix socket). Covered: the memory guard and its
 override, the warnings, the first start's settings and the login link, the
@@ -22,9 +22,9 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-COMPONENT = os.path.join(HERE, "moonraker", "components", "kiln_tailscale.py")
+COMPONENT = os.path.join(HERE, "moonraker", "components", "tailscale.py")
 FAKE = os.path.join(HERE, "tests", "fake_tailscaled.py")
-spec = importlib.util.spec_from_file_location("kiln_tailscale_component",
+spec = importlib.util.spec_from_file_location("tailscale_component",
                                               COMPONENT)
 kt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(kt)
@@ -260,9 +260,9 @@ async def test_ports():
     check("ports invalid: not started", st["state"] == "config_error"
           and len(env.calls("started")) == 3)
     check("ports invalid: warning names the entry",
-          "7912x" in srv.warnings.get("kiln_tailscale_ports", ""))
-    await srv.remote["kiln_tailscale_login"]()
-    check("ports invalid: KILN_TAILSCALE_LOGIN says why",
+          "7912x" in srv.warnings.get("tailscale_ports", ""))
+    await srv.remote["tailscale_login"]()
+    check("ports invalid: TAILSCALE_LOGIN says why",
           any("7912x" in l for l in srv.console()))
     await c.close()
     env.cleanup()
@@ -278,9 +278,9 @@ async def test_memory_guard():
         check("guard %s/%s: not started" % (mem, hw),
               st["state"] == "memory_guard" and not env.calls("started"))
         check("guard %s/%s: warning" % (mem, hw),
-              "kiln_tailscale_memory" in srv.warnings
+              "tailscale_memory" in srv.warnings
               and "allow_low_memory: True" in srv.warnings[
-                  "kiln_tailscale_memory"])
+                  "tailscale_memory"])
         await c._remote_status()
         check("guard %s/%s: console status says why" % (mem, hw),
               any("not started" in l for l in srv.console()))
@@ -295,11 +295,11 @@ async def test_override():
     ok = await wait_for(lambda: c.get_status()["state"] == "needs_login")
     check("override: started, waiting for login", ok)
     check("override: persistent low-memory warning",
-          srv.warnings.get("kiln_tailscale_low_memory") ==
+          srv.warnings.get("tailscale_low_memory") ==
           kt.LOW_MEMORY_WARNING and "may cause slowdowns or memory errors "
           "during prints" in kt.LOW_MEMORY_WARNING)
     check("override: no guard warning",
-          "kiln_tailscale_memory" not in srv.warnings)
+          "tailscale_memory" not in srv.warnings)
     check("override: status marks it",
           c.get_status()["memory_guard"]["override"])
     await c.close()
@@ -310,11 +310,11 @@ async def test_first_start_login_restart():
     env = Env()
     srv, c = env.component()
     check("endpoints registered", set(srv.endpoints) == {
-        "/server/kiln_tailscale/status", "/server/kiln_tailscale/login",
-        "/server/kiln_tailscale/logout"})
+        "/server/tailscale/status", "/server/tailscale/login",
+        "/server/tailscale/logout"})
     check("remote methods registered", set(srv.remote) == {
-        "kiln_tailscale_status", "kiln_tailscale_login",
-        "kiln_tailscale_logout"})
+        "tailscale_status", "tailscale_login",
+        "tailscale_logout"})
     await c.component_init()
     ok = await wait_for(lambda: c.get_status()["login_url"])
     st = c.get_status()
@@ -322,12 +322,12 @@ async def test_first_start_login_restart():
           st["login_url"] == "https://login.tailscale.com/a/0123456789abcdef"
           and st["state"] == "needs_login")
     check("first start: login warning names the link",
-          st["login_url"] in srv.warnings.get("kiln_tailscale_login", ""))
+          st["login_url"] in srv.warnings.get("tailscale_login", ""))
     check("first start: link in the console",
           any(st["login_url"] in l for l in srv.console()))
     check("first start: no memory warnings", not any(
-        w in srv.warnings for w in ("kiln_tailscale_memory",
-                                    "kiln_tailscale_low_memory")))
+        w in srv.warnings for w in ("tailscale_memory",
+                                    "tailscale_low_memory")))
     started = env.calls("started")
     check("tailscaled flags", started and all(a in started[0]["argv"] for a in (
         "--tun=userspace-networking", "--statedir=" + env.state,
@@ -352,10 +352,10 @@ async def test_first_start_login_restart():
     check("moonraker log: login link redacted",
           not any("0123456789abcdef" in l for l in c.log_lines)
           and any("[login link]" in l for l in c.log_lines))
-    check("notification name notify_kiln_tailscale_status_changed",
-          srv.notifications == ["kiln_tailscale_status_changed"])
+    check("notification name notify_tailscale_status_changed",
+          srv.notifications == ["tailscale_status_changed"])
     check("status notification sent", any(
-        n == "kiln_tailscale:status_changed" for n, a in srv.events))
+        n == "tailscale:status_changed" for n, a in srv.events))
 
     env.login()
     ok = await wait_for(lambda: c.get_status()["state"] == "running")
@@ -365,7 +365,7 @@ async def test_first_start_login_restart():
           st["dns_name"] == "kiln-test.example-tailnet.ts.net" and
           st["tailnet"] == "user@example.com" and st["login_url"] is None)
     check("after login: login warning gone",
-          "kiln_tailscale_login" not in srv.warnings)
+          "tailscale_login" not in srv.warnings)
     await c._remote_status()
     check("console status: connected + Fluidd address", any(
         "connected as kiln-test.example-tailnet.ts.net (100.64.0.7)" in l
@@ -411,7 +411,7 @@ async def test_oom():
     check("OOM: switched off", ok)
     check("OOM: marker written",
           os.path.exists(os.path.join(env.state, kt.OOM_MARKER)))
-    check("OOM: warning", "kiln_tailscale_oom" in srv.warnings)
+    check("OOM: warning", "tailscale_oom" in srv.warnings)
     await asyncio.sleep(1.)
     check("OOM: not restarted", len(env.calls("started")) == 1)
     check("OOM: console says so",
@@ -424,12 +424,12 @@ async def test_oom():
     await asyncio.sleep(0.5)
     check("OOM: next start stays off", c.get_status()["state"] == "oom_off"
           and len(env.calls("started")) == 1
-          and "kiln_tailscale_oom" in srv.warnings)
+          and "tailscale_oom" in srv.warnings)
     env.mode("normal")
-    await srv.remote["kiln_tailscale_login"]()
+    await srv.remote["tailscale_login"]()
     ok = await wait_for(lambda: c.get_status()["state"] == "running")
-    check("OOM: KILN_TAILSCALE_LOGIN starts it again", ok and
-          "kiln_tailscale_oom" not in srv.warnings and
+    check("OOM: TAILSCALE_LOGIN starts it again", ok and
+          "tailscale_oom" not in srv.warnings and
           not os.path.exists(os.path.join(env.state, kt.OOM_MARKER)))
     await c.close()
     env.cleanup()
@@ -456,7 +456,7 @@ async def test_logout():
     await wait_for(lambda: c.get_status()["login_url"])
     env.login()
     await wait_for(lambda: c.get_status()["state"] == "running")
-    st = await srv.endpoints["/server/kiln_tailscale/logout"][1](None)
+    st = await srv.endpoints["/server/tailscale/logout"][1](None)
     check("logout: LocalAPI logout called", len(env.calls("logout")) == 1)
     check("logout: stopped, logged_out", st["state"] == "logged_out"
           and not st["daemon"]["running"])
@@ -469,7 +469,7 @@ async def test_logout():
     check("logout: next start stays off",
           c.get_status()["state"] == "logged_out"
           and len(env.calls("started")) == 1)
-    await srv.endpoints["/server/kiln_tailscale/login"][1](None)
+    await srv.endpoints["/server/tailscale/login"][1](None)
     ok = await wait_for(lambda: c.get_status()["login_url"])
     check("login again: new link", ok and
           len(env.calls("login-interactive")) == 2)
@@ -478,8 +478,8 @@ async def test_logout():
     srv, c = env.component()
     await c.component_init()
     await wait_for(lambda: c.get_status()["state"] == "needs_login")
-    await srv.remote["kiln_tailscale_logout"]()
-    check("KILN_TAILSCALE_LOGOUT: logged out, console says how to remove",
+    await srv.remote["tailscale_logout"]()
+    check("TAILSCALE_LOGOUT: logged out, console says how to remove",
           c.get_status()["state"] == "logged_out" and
           any("admin console" in l for l in srv.console()))
     await c.close()
@@ -493,7 +493,7 @@ async def test_errors():
     await asyncio.sleep(0.3)
     check("missing binary: error state and warning",
           c.get_status()["state"] == "error" and
-          "kiln_tailscale_error" in srv.warnings)
+          "tailscale_error" in srv.warnings)
     await c.close()
     srv, c = env.component(socket="/tmp/" + "x" * 120 + "/ts.sock")
     await c.component_init()
@@ -546,15 +546,15 @@ def test_plugin_files():
     cfg.read(os.path.join(HERE, "plugin.cfg"))
     macros = {s.split(None, 1)[1]: cfg[s]["gcode"] for s in cfg.sections()
               if s.startswith("gcode_macro ")}
-    for name, method in (("KILN_TAILSCALE_STATUS", "kiln_tailscale_status"),
-                         ("KILN_TAILSCALE_LOGIN", "kiln_tailscale_login"),
-                         ("KILN_TAILSCALE_LOGOUT", "kiln_tailscale_logout")):
+    for name, method in (("TAILSCALE_STATUS", "tailscale_status"),
+                         ("TAILSCALE_LOGIN", "tailscale_login"),
+                         ("TAILSCALE_LOGOUT", "tailscale_logout")):
         check("plugin.cfg: %s calls %s" % (name, method),
               'action_call_remote_method("%s")' % method in macros.get(name, ""))
     mc = configparser.ConfigParser(strict=False, interpolation=None)
     mc.read(os.path.join(HERE, "moonraker.conf"))
-    check("moonraker.conf: [kiln_tailscale] without options",
-          mc.has_section("kiln_tailscale") and not mc.options("kiln_tailscale"))
+    check("moonraker.conf: [tailscale] without options",
+          mc.has_section("tailscale") and not mc.options("tailscale"))
     um = mc["update_manager kiln-tailscale"]
     check("moonraker.conf: update_manager",
           um["origin"] == "https://github.com/djvalic/kiln-tailscale.git" and
