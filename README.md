@@ -83,11 +83,17 @@ with the camera, as at home. Slicers that upload to the printer can use
 the same address (OrcaSlicer: host `100.x.y.z`, port 80, or 7125 for
 Moonraker directly).
 
-CPU: idle, Tailscale uses next to nothing. Everything you look at remotely
-is encrypted on the printer, and the camera stream is the heavy part:
-watching it remotely used up to about 70% of one of the printer's two
-cores in testing. Tailscale runs at the lowest priority, so Klipper still
-comes first; during a long print, check in on the camera now and then
+CPU: connected but idle, Tailscale uses next to nothing. Everything you
+look at remotely is encrypted on the printer, and the camera stream is the
+heavy part. Measured on an AD5X during a print (Kiln OS v1.1 test build,
+Fluidd with the camera open on a phone, direct connection): the camera
+sent about 0.8 MB/s, tailscaled used 35-45% of the printer's CPU (most of
+one of its two cores), and the whole printer went from about 20% busy to
+about 80%. The camera itself costs almost nothing; the cost is the
+encryption. The print ran normally, and closing the connection brought
+tailscaled straight back to 0%. Tailscale runs at the lowest priority, so
+Klipper still comes first, but at 80% there is little room to spare:
+during a print, check in on the camera now and then, or hide it in Fluidd,
 rather than leaving it streaming.
 
 ### What your tailnet can reach
